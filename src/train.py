@@ -1,100 +1,105 @@
-"""
-train.py
---------
-Trains Logistic Regression, SVM, Random Forest, and XGBoost on the
-bank marketing dataset using sklearn Pipelines (so preprocessing +
-model are bundled together — this is what you'd actually deploy).
-
-Handles class imbalance with `class_weight='balanced'` (LogReg, SVM, RF)
-and `scale_pos_weight` (XGBoost) rather than SMOTE, to keep the pipeline
-simple and avoid leaking synthetic samples across train/test.
-"""
-
 import joblib
-import numpy as np
-import pandas as pd
+
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
+
 from xgboost import XGBClassifier
 
 from src.preprocess import build_preprocessed_data
 
 
-def build_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
-    categorical_cols = X.select_dtypes(include=["object"]).columns.tolist()
-    numeric_cols = X.select_dtypes(
-        include=["int64", "float64"]).columns.tolist()
+def create_preprocessor(X):
+    cat_cols = X.select_dtypes(include=["object"]).columns.tolist()
+    num_cols = X.select_dtypes(include=["int64", "float64"]).columns.tolist()
 
-    numeric_transformer = Pipeline(steps=[
+    num_pipeline = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler()),
+        ("scaler", StandardScaler())
     ])
 
-    categorical_transformer = Pipeline(steps=[
+    cat_pipeline = Pipeline([
         ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ("encoder", OneHotEncoder(handle_unknown="ignore"))
     ])
 
-    preprocessor = ColumnTransformer(transformers=[
-        ("num", numeric_transformer, numeric_cols),
-        ("cat", categorical_transformer, categorical_cols),
+    return ColumnTransformer([
+        ("num", num_pipeline, num_cols),
+        ("cat", cat_pipeline, cat_cols)
     ])
-    return preprocessor
 
 
-def get_models(y_train: pd.Series) -> dict:
-    # for XGBoost scale_pos_weight
-    pos_ratio = (y_train == 0).sum() / (y_train == 1).sum()
+def get_models(y_train):
+    weight = (y_train == 0).sum() / (y_train == 1).sum()
 
     models = {
         "Logistic Regression": LogisticRegression(
-            max_iter=1000, class_weight="balanced", random_state=42
+            max_iter=1000,
+            class_weight="balanced",
+            random_state=42
         ),
 
         "Random Forest": RandomForestClassifier(
-            n_estimators=300, class_weight="balanced", random_state=42, n_jobs=-1
+            n_estimators=300,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1
         ),
+
         "XGBoost": XGBClassifier(
             n_estimators=300,
             max_depth=5,
             learning_rate=0.1,
-            scale_pos_weight=pos_ratio,
+            scale_pos_weight=weight,
             eval_metric="logloss",
             random_state=42,
-            n_jobs=-1,
-        ),
+            n_jobs=-1
+        )
     }
+
     return models
 
 
-def train_all(raw_path: str):
-    X_train, X_test, y_train, y_test = build_preprocessed_data(raw_path)
-    preprocessor = build_preprocessor(X_train)
+def train_models(data_path):
+    X_train, X_test, y_train, y_test = build_preprocessed_data(data_path)
+
+    preprocessor = create_preprocessor(X_train)
     models = get_models(y_train)
 
-    trained_pipelines = {}
+    trained_models = {}
+
     for name, model in models.items():
         print(f"Training {name}...")
-        pipe = Pipeline(
-            steps=[("preprocessor", preprocessor), ("classifier", model)])
-        pipe.fit(X_train, y_train)
-        trained_pipelines[name] = pipe
 
-        # Save each model
-        filename = f"models/{name.replace(' ', '_').replace('(', '').replace(')', '')}.pkl"
-        joblib.dump(pipe, filename)
-        print(f"Saved -> {filename}")
+        pipeline = Pipeline([
+            ("preprocessor", preprocessor),
+            ("classifier", model)
+        ])
 
-    return trained_pipelines, X_test, y_test
+        pipeline.fit(X_train, y_train)
+
+        trained_models[name] = pipeline
+
+        file_name = (
+            "models/"
+            + name.replace(" ", "_").replace("(", "").replace(")", "")
+            + ".pkl"
+        )
+
+        joblib.dump(pipeline, file_name)
+        print(f"Saved -> {file_name}")
+
+    return trained_models, X_test, y_test
 
 
 if __name__ == "__main__":
-    trained_pipelines, X_test, y_test = train_all(
-        "data/bank-additional-full.csv")
+    trained_models, X_test, y_test = train_models(
+        "data/bank-additional-full.csv"
+    )
+
     joblib.dump((X_test, y_test), "models/test_data.pkl")
+
     print("\nAll models trained and saved.")
